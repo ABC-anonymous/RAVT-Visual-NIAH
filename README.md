@@ -1,31 +1,38 @@
 # RAVT Visual-NIAH
 
-Reproduction code for **When Does OCR-Free Retrieval Help? A Controlled Study
-of Text and Visual Retrieval under Degradation**.
+Companion code for the manuscript:
 
-This repository contains the code needed to generate Visual-NIAH, train RAVT,
-run the retrieval baselines, evaluate degraded real pages, reproduce the
-adaptation experiments, and recompute the reported statistics. Datasets, model
-weights, checkpoints, and generated results are distributed separately because
-of size and third-party licensing.
+> **When Does OCR-Free Retrieval Help? A Controlled Study of Text and Visual
+> Retrieval under Degradation**
 
-Anonymized review repository:
-<https://github.com/ABC-anonymous/RAVT-Visual-NIAH>.
+Suggested GitHub repository name: `ravt-visual-niah`.
+
+This repository contains the code required to generate the benchmark, train
+RAVT, run the retrieval baselines, reproduce the aggregate results, and verify
+that the released task manifest matches the generated evaluation set. The
+manuscript is intentionally not included before publication.
 
 ## Repository layout
 
 ```text
 code/
-  ravt/          benchmark generation, RAVT, baselines, and evaluation
-  adaptation/    unseen-corruption and LoRA adaptation experiments
-  experiments/   ablations, efficiency, and real-page diagnostic probes
-  analysis/      aggregation, bootstrap, and statistical analysis
+  server_src/       data generation, training, evaluation, and real-page pipeline
+  review_extras18/  unseen-corruption and multi-seed adaptation experiments
+  analysis/         result aggregation, bootstrap, and manifest export
+reproducibility/
+  benchmark_manifest.csv
+  EXPECTED_RESULTS.md
+  DATA_PROVENANCE.md
+  SHA256SUMS.txt
 ```
+
+Datasets, model weights, trained checkpoints, OCR caches, generated images, and
+per-task predictions are excluded from Git because of size and third-party
+licensing.
 
 ## Environment
 
-The supported runtime is Linux with Python 3.12, CUDA, and a POSIX-compatible
-shell. Run the commands from the repository root.
+The experiments used Python 3.12 and CUDA.
 
 ```bash
 python -m venv .venv
@@ -33,9 +40,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Data
+On Windows PowerShell:
 
-Download WikiText-103 from
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+## Download datasets
+
+WikiText-103 comes from
 [`Salesforce/wikitext`](https://huggingface.co/datasets/Salesforce/wikitext):
 
 ```bash
@@ -47,31 +61,35 @@ data.save_to_disk("dataset/wikitext-103")
 PY
 ```
 
-The real-page evaluation uses
-[`vidore/docvqa_test_subsampled_beir`](https://huggingface.co/datasets/vidore/docvqa_test_subsampled_beir):
+The real-page evaluation uses the DocVQA split of ViDoRe:
+[`vidore/docvqa_test_subsampled_beir`](https://huggingface.co/datasets/vidore/docvqa_test_subsampled_beir).
 
 ```bash
 hf download vidore/docvqa_test_subsampled_beir \
   --repo-type dataset \
   --local-dir data/docvqa_beir
-
-python code/ravt/export_real_pages.py \
-  --pages 500 \
-  --out data/vidore_docvqa
 ```
 
-All downloads and generated data should be stored under `data/` or `dataset/`.
-Both directories are excluded from Git.
-
-## Model weights
-
-Download the text and visual baselines:
+Export the page-image layout expected by the evaluation code:
 
 ```bash
-python code/ravt/download_models.py --out models_local
+python code/server_src/ravt_real_docs/export_real_docs.py \
+  --pages 500 --out data/vidore_docvqa
 ```
 
-| Model | Source | Local path |
+All downloaded and generated data go under `data/` or `dataset/`, both of which
+are ignored by Git.
+
+## Download model weights
+
+Download the standard text and visual baselines with:
+
+```bash
+python code/server_src/eval_suite/download_models.py \
+  --out models_local
+```
+
+| Model | Source | Local destination |
 |---|---|---|
 | BGE-M3 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) | `models_local/bge-m3` |
 | ByT5-small | [`google/byt5-small`](https://huggingface.co/google/byt5-small) | `models_local/byt5-small` |
@@ -79,39 +97,48 @@ python code/ravt/download_models.py --out models_local
 | ColQwen2 base | [`vidore/colqwen2-base`](https://huggingface.co/vidore/colqwen2-base) | `models_local/colqwen2-base` |
 | ColQwen2 adapter | [`vidore/colqwen2-v1.0`](https://huggingface.co/vidore/colqwen2-v1.0) | `models_local/colqwen2` |
 
-Download the CLIP backbone and ColPali components:
+Download the additional ColQwen2.5 and ColPali adaptation weights:
+
+```bash
+python code/server_src/review_extras5/30_download_baselines.py --dest .
+```
+
+Download the CLIP image encoder:
 
 ```bash
 hf download openai/clip-vit-large-patch14 \
   --local-dir clip_local_weights_224
+```
 
+For the PEFT-based ColPali setup:
+
+```bash
 hf download google/paligemma-3b-mix-448 \
   --local-dir colpali_offline_weights/base_model
-
 hf download vidore/colpali-v1.2 \
   --local-dir colpali_offline_weights/adapter_model
 ```
 
-Additional baselines used in the diagnostic experiments can be downloaded
-with:
+Pretrained RAVT checkpoints and the LoRA adapters trained in this study are
+provided as GitHub Release assets, not Git objects. Place them under:
 
-```bash
-python code/experiments/download_baselines.py --dest models_local
+```text
+checkpoints/full_p14_rh42_s0.pth
+...
+checkpoints/full_p14_rh42_s4.pth
+checkpoints/colpali_lora_s0/
+checkpoints/colpali_lora_s1/
+checkpoints/colpali_lora_s2/
+checkpoints/colqwen2_lora_s0/
+checkpoints/colqwen2_lora_s1/
+checkpoints/colqwen2_lora_s2/
 ```
 
-### Checkpoints during anonymous review
-
-Large checkpoint binaries are omitted from the anonymized review repository.
-All reported models, including the seed-0 main and degradation-aware models, are
-regenerated by the training commands below. Public checkpoint links will be
-restored in the final version after acceptance.
-
-## Build Visual-NIAH
+## Generate Visual-NIAH
 
 ```bash
 export RAVT_BLOCK_HEIGHT=42
-
-python code/ravt/build_benchmark.py \
+python code/server_src/train_pipeline/prepare_data.py \
   --base-dir . \
   --records 50000 \
   --train-blocks data/processed/train_blocks_rh42 \
@@ -120,232 +147,84 @@ python code/ravt/build_benchmark.py \
   --test-tasks 720 \
   --extra-benches image,real \
   --overwrite
-
-python code/ravt/audit_benchmark.py \
-  --bench data/test_bench_tmm_rh42
 ```
 
-## Train RAVT from the CLIP backbone
+The fixed seed and task construction are implemented in
+`code/server_src/train_pipeline/stage_data.py`; the released manifest is in
+`reproducibility/benchmark_manifest.csv`.
 
-"Training from scratch" in this repository means initializing RAVT from the
-pretrained CLIP backbone in `clip_local_weights_224`, not from random weights.
-The CLIP backbone is frozen except for its last three vision layers, last two
-text layers, and vision LayerNorm parameters; the RAVT fusion, projection,
-tokenization heads, and temperature are trained from their initial values.
-
-No RAVT checkpoint is required for this path. First verify the backbone:
+## Train RAVT
 
 ```bash
-python code/ravt/train.py \
-  --clip-path clip_local_weights_224 \
-  --check-backbone
-```
-
-Then train the five reported main-model seeds:
-
-```bash
-python code/ravt/train.py \
-  --clip-path clip_local_weights_224 \
+python code/server_src/train_pipeline/train.py \
   --train-blocks data/processed/train_blocks_rh42 \
   --row-height 42 \
   --tag rh42 \
   --seeds 0 1 2 3 4
 ```
 
-To regenerate only the two released checkpoints, use seed 0 for the main model:
-
-```bash
-python code/ravt/train.py \
-  --clip-path clip_local_weights_224 \
-  --train-blocks data/processed/train_blocks_rh42 \
-  --row-height 42 \
-  --tag rh42 \
-  --seeds 0
-```
-
-and seed 0 for the degradation-aware model:
-
-```bash
-python code/ravt/train_degraded.py \
-  --runs deg \
-  --clip-path clip_local_weights_224 \
-  --train-blocks data/processed/train_blocks_rh42 \
-  --row-height 42 \
-  --run-tag rh42 \
-  --seeds 0
-```
-
-This produces:
-
-```text
-checkpoints/full_p14_rh42_s0.pth ... full_p14_rh42_s4.pth
-```
-
-To train the degradation-aware models from the CLIP backbone as well:
-
-```bash
-python code/ravt/train_degraded.py \
-  --runs deg,degreal \
-  --clip-path clip_local_weights_224 \
-  --train-blocks data/processed/train_blocks_rh42 \
-  --row-height 42 \
-  --run-tag rh42 \
-  --seeds 0 1 2 3 4
-```
-
-This produces `deg_rh42_p14_s*.pth` and `degreal_rh42_p14_s*.pth`. Use
-`--dry-run` for a short environment test or `--plan` to print the training
-matrix without starting a run.
-
-The released seed-0 main checkpoint can instead be used to warm-start the
-degradation-aware model:
-
-```bash
-python code/ravt/train_degraded.py \
-  --runs deg \
-  --init-from checkpoints/full_p14_rh42_s0.pth \
-  --train-blocks data/processed/train_blocks_rh42 \
-  --row-height 42 \
-  --run-tag rh42 \
-  --seeds 0 \
-  --epochs 5
-```
-
-Generate the ablation checkpoints with:
-
-```bash
-python code/ravt/train.py \
-  --clip-path clip_local_weights_224 \
-  --train-blocks data/processed/train_blocks_rh42 \
-  --row-height 42 \
-  --tag rh42 \
-  --seeds 0 \
-  --ablation all \
-  --ablation-seeds 0
-```
-
-Generate the curriculum-endpoint checkpoints with:
-
-```bash
-python code/experiments/train_curriculum_endpoints.py \
-  --root "$PWD" \
-  --python "$(which python)" \
-  --rates 0.15 0.45
-```
-
-The ColPali and ColQwen2 LoRA adapters are regenerated by the adaptation
-workflow described below.
+Add `--dry-run` first to validate the local installation without a full run.
 
 ## Evaluate
 
-Main benchmark:
-
 ```bash
-python code/ravt/evaluate.py \
+python code/server_src/eval_suite/eval_all.py \
   --models RAVT,BM25,BGE-M3,ColPali,ColQwen2 \
   --benches main \
   --bench-main data/test_bench_tmm_rh42 \
   --row-height 42 \
-  --out-dir results/jsonl/main \
+  --out-dir results/jsonl/eval_tmm_rh42 \
   --on-missing error
 ```
 
-Degradation probes:
+Run the two degradation probes:
 
 ```bash
-python code/ravt/evaluate.py \
+python code/server_src/eval_suite/eval_all.py \
   --models RAVT,BM25,BGE-M3,ColPali,ColQwen2 \
   --benches image,real \
   --bench-image data/test_image \
   --bench-real data/test_real \
   --row-height 42 \
-  --out-dir results/jsonl/probes \
+  --out-dir results/jsonl/eval_axes \
   --on-missing error
 ```
 
-Real ViDoRe/DocVQA pages:
+Run the unseen-corruption probe and multi-seed VLM adaptation:
 
 ```bash
-bash code/ravt/run_real_pages.sh
+bash code/review_extras18/run_core.sh --base "$PWD" --python "$(which python)"
 ```
 
-## Adaptation experiments
-
-Run the unseen-corruption evaluation, CER-proxy calibration, routing analysis,
-and the three-seed LoRA adaptation:
+Run the real-page DocVQA/ViDoRe evaluation:
 
 ```bash
-bash code/adaptation/run_adaptation.sh --base "$PWD" --python "$(which python)"
+bash code/server_src/run_vidore.sh
 ```
 
-The runner resumes completed adapters and evaluation records.
+## Verify the released data
 
-## Diagnostic experiments
-
-Run all paper probes:
+Check the generated task set:
 
 ```bash
-bash code/experiments/run_experiments.sh all --base "$PWD" --python "$(which python)"
+python code/server_src/eval_suite/audit_benchmark.py \
+  --bench data/test_bench_tmm_rh42
 ```
 
-The same script accepts `robustness`, `ablations`, or `baselines` to run one
-experiment group at a time.
+Compare the resulting JSONL aggregates with
+`reproducibility/EXPECTED_RESULTS.md`. Dataset provenance is documented in
+`reproducibility/DATA_PROVENANCE.md`; exact probe counts are recorded in
+`reproducibility/PROBE_CONFIG.json`. Checksums for the manifest and core
+evaluation code are in `reproducibility/SHA256SUMS.txt`.
 
-## Analysis
-
-The `code/analysis/` directory performs the post-processing needed to turn
-per-task JSONL evaluation records into the aggregate tables and confidence
-intervals reported in the paper. It does not load model weights or rerun
-retrieval. Its three entry points serve different purposes:
-
-- `summarize_results.py` aggregates Recall@1, DER, storage, and latency results
-  across seeds and degradation levels.
-- `stats_cluster.py` computes the design-cell cluster bootstrap and the routing
-  operating points.
-- `hierarchical_bootstrap.py` computes the hierarchical bootstrap for RAVT,
-  the released baselines, and the LoRA adapters.
-
-Aggregate JSONL task records:
+Run the packaged integrity check with:
 
 ```bash
-python code/analysis/summarize_results.py \
-  --run . \
-  --axes-dir results/jsonl/probes \
-  --out results/analysis/final_results.md
-```
-
-Run the design-cell cluster bootstrap and routing analysis:
-
-```bash
-python code/analysis/stats_cluster.py \
-  --main-dir results/jsonl/main \
-  --axes-dir results/jsonl/probes \
-  --out results/analysis/cluster_stats.md
-```
-
-Run the hierarchical bootstrap:
-
-```bash
-python code/analysis/hierarchical_bootstrap.py \
-  --main-dir results/jsonl/main \
-  --colpali-lora-dirs results/jsonl/colpali_s0 \
-                       results/jsonl/colpali_s1 \
-                       results/jsonl/colpali_s2 \
-  --colqwen2-lora-dirs results/jsonl/colqwen2_s0 \
-                       results/jsonl/colqwen2_s1 \
-                       results/jsonl/colqwen2_s2 \
-  --out results/analysis/hierarchical_bootstrap.md
+python reproducibility/verify.py
 ```
 
 ## Scope
 
-RAVT is a low-cost visual encoder for exact-copy block matching. Its index-time
-path is OCR-free, but the query is a clean text transcript and the real-page
-pipeline uses a line detector. The benchmark used in this study is English,
-single-font, single-column, and line-level; the reported results should not be
-interpreted as general document question answering or layout understanding.
-
-## License
-
-The source code is released under the MIT License. Datasets, pretrained model
-weights, and third-party checkpoints remain subject to their original licenses.
+RAVT performs exact-copy short-block localization from a clean transcription.
+It requires row segmentation, does not preserve row order, and is not a
+general document question-answering system.
